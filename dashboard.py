@@ -194,33 +194,55 @@ CLASS_COLORS = {"ERN": "🟡", "FCF": "🟢", "DIV": "🔵", "REV": "🟠"}
 @st.cache_data(ttl=300)
 def fetch_stock_data(tickers):
     rows = []
+    errors = []
     for item in tickers:
         t = item["ticker"]
         try:
-            info = yf.Ticker(t).info
-            price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("navPrice")
-            prev_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
+            ticker_obj = yf.Ticker(t)
+            info = ticker_obj.info
+
+            # info dict sometimes returns empty on cloud — fallback to fast_info
+            price = (info.get("currentPrice") or info.get("regularMarketPrice")
+                     or info.get("navPrice"))
+            prev_close = (info.get("previousClose")
+                          or info.get("regularMarketPreviousClose"))
+
+            # Fallback: use fast_info if info didn't return price
+            if not price:
+                try:
+                    fi = ticker_obj.fast_info
+                    price      = getattr(fi, "last_price", None)
+                    prev_close = getattr(fi, "previous_close", None)
+                except Exception:
+                    pass
+
             change_pct = ((price - prev_close) / prev_close * 100) if price and prev_close else None
+
             rows.append({
-                "Ticker": t,
-                "Name": info.get("shortName") or info.get("longName") or t,
-                "Sector": item["sector"],
-                "Class": item["class"],
-                "Price": price,
-                "Chg %": change_pct,
-                "Volume": info.get("regularMarketVolume"),
-                "Mkt Cap": info.get("marketCap"),
-                "P/E": info.get("trailingPE"),
+                "Ticker":   t,
+                "Name":     info.get("shortName") or info.get("longName") or t,
+                "Sector":   item["sector"],
+                "Class":    item["class"],
+                "Price":    price,
+                "Chg %":    change_pct,
+                "Volume":   info.get("regularMarketVolume"),
+                "Mkt Cap":  info.get("marketCap"),
+                "P/E":      info.get("trailingPE"),
                 "52W High": info.get("fiftyTwoWeekHigh"),
-                "52W Low": info.get("fiftyTwoWeekLow"),
-                "EPS": info.get("trailingEps"),
-                "Div Yield": info.get("dividendYield"),
+                "52W Low":  info.get("fiftyTwoWeekLow"),
+                "EPS":      info.get("trailingEps"),
+                "Div Yield":info.get("dividendYield"),
             })
-        except Exception:
+        except Exception as e:
+            errors.append(f"{t}: {e}")
             rows.append({"Ticker": t, "Name": t, "Sector": item["sector"], "Class": item["class"],
                          "Price": None, "Chg %": None, "Volume": None, "Mkt Cap": None,
                          "P/E": None, "52W High": None, "52W Low": None, "EPS": None, "Div Yield": None})
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+    if errors:
+        df.attrs["errors"] = errors
+    return df
 
 @st.cache_data(ttl=600)
 def fetch_news(tickers):
@@ -586,6 +608,16 @@ st.markdown(f"""
 
 filtered_portfolio = [p for p in PORTFOLIO if p["ticker"] in sel_tickers]
 df = fetch_stock_data(filtered_portfolio)
+
+if df.attrs.get("errors"):
+    with st.expander("⚠️ Data fetch warnings (click to expand)"):
+        for err in df.attrs["errors"]:
+            st.caption(err)
+
+null_prices = df["Price"].isna().sum()
+if null_prices == len(df):
+    st.error("❌ Could not fetch any market data. Yahoo Finance may be rate-limiting this server. Try refreshing in a minute.")
+    st.stop()
 
 ticker_name_map = {row["Ticker"]: row["Name"] for _, row in df.iterrows()}
 ticker_labels = [f"{t} — {ticker_name_map.get(t, t)}" for t in sel_tickers]
