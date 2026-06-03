@@ -1,5 +1,6 @@
-streamlit==1.45.1
-yfinance==1.3.0
-pandas==2.2.3
-plotly==5.24.1
-requests>=2.31.0
+streamlit
+yfinance
+pandas
+plotly
+curl_cffi
+requests

@@ -4,6 +4,14 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 
+try:
+    from curl_cffi import requests as curl_requests
+    @st.cache_resource
+    def get_session():
+        return curl_requests.Session(impersonate="chrome110")
+except ImportError:
+    get_session = lambda: None
+
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide", page_icon="📈")
 
 st.markdown("""
@@ -191,6 +199,13 @@ CLASS_COLORS = {"ERN": "🟡", "FCF": "🟢", "DIV": "🔵", "REV": "🟠"}
 
 # ── Data Fetching ─────────────────────────────────────────────────────────────
 
+def yticker(symbol):
+    """Create a yfinance Ticker with curl_cffi session when available."""
+    session = get_session()
+    if session is not None:
+        return yf.Ticker(symbol, session=session)
+    return yf.Ticker(symbol)
+
 @st.cache_data(ttl=300)
 def fetch_stock_data(tickers):
     rows = []
@@ -198,7 +213,7 @@ def fetch_stock_data(tickers):
     for item in tickers:
         t = item["ticker"]
         try:
-            ticker_obj = yf.Ticker(t)
+            ticker_obj = yticker(t)
             info = ticker_obj.info
 
             # info dict sometimes returns empty on cloud — fallback to fast_info
@@ -250,7 +265,7 @@ def fetch_news(tickers):
     for item in tickers:
         t = item["ticker"]
         try:
-            news = yf.Ticker(t).news
+            news = yticker(t).news
             for n in (news or [])[:3]:
                 content = n.get("content", {})
                 title = content.get("title", n.get("title", ""))
@@ -269,18 +284,25 @@ def fetch_news(tickers):
 
 @st.cache_data(ttl=600)
 def fetch_detail(ticker):
-    t = yf.Ticker(ticker)
-    return {
-        "info": t.info,
-        "quarterly_financials": t.quarterly_financials,
-        "financials": t.financials,
-        "balance_sheet": t.balance_sheet,
-        "cashflow": t.cashflow,
-    }
+    try:
+        t = yticker(ticker)
+        return {
+            "info": t.info,
+            "quarterly_financials": t.quarterly_financials,
+            "financials": t.financials,
+            "balance_sheet": t.balance_sheet,
+            "cashflow": t.cashflow,
+        }
+    except Exception:
+        return {"info": {}, "quarterly_financials": None,
+                "financials": None, "balance_sheet": None, "cashflow": None}
 
 @st.cache_data(ttl=300)
 def get_history(ticker, period):
-    return yf.Ticker(ticker).history(period=period)
+    try:
+        return yticker(ticker).history(period=period)
+    except Exception:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def fetch_industry_peers(industry_key, exclude_ticker, max_peers=12):
@@ -294,7 +316,7 @@ def fetch_industry_peers(industry_key, exclude_ticker, max_peers=12):
     rows = []
     for sym in peer_symbols:
         try:
-            inf = yf.Ticker(sym).info
+            inf = yticker(sym).info
             price = inf.get("currentPrice") or inf.get("regularMarketPrice")
             rev   = inf.get("totalRevenue")
             mcap  = inf.get("marketCap")
@@ -324,7 +346,7 @@ def fetch_peers_data(peer_tickers):
     rows = []
     for t in peer_tickers:
         try:
-            info = yf.Ticker(t).info
+            info = yticker(t).info
             price     = info.get("currentPrice") or info.get("regularMarketPrice")
             prev      = info.get("previousClose") or info.get("regularMarketPreviousClose")
             chg       = ((price - prev) / prev * 100) if price and prev else None
