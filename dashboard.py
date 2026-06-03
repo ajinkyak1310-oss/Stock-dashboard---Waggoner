@@ -5,12 +5,10 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 try:
-    from curl_cffi import requests as curl_requests
-    @st.cache_resource
-    def get_session():
-        return curl_requests.Session(impersonate="chrome110")
-except ImportError:
-    get_session = lambda: None
+    from curl_cffi import requests as cffi_requests
+    _YF_SESSION = cffi_requests.Session(impersonate="chrome110")
+except Exception:
+    _YF_SESSION = None
 
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide", page_icon="📈")
 
@@ -201,9 +199,8 @@ CLASS_COLORS = {"ERN": "🟡", "FCF": "🟢", "DIV": "🔵", "REV": "🟠"}
 
 def yticker(symbol):
     """Create a yfinance Ticker with curl_cffi session when available."""
-    session = get_session()
-    if session is not None:
-        return yf.Ticker(symbol, session=session)
+    if _YF_SESSION is not None:
+        return yf.Ticker(symbol, session=_YF_SESSION)
     return yf.Ticker(symbol)
 
 @st.cache_data(ttl=300)
