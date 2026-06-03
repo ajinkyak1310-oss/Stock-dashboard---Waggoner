@@ -1056,7 +1056,7 @@ if selected_rows:
             r2.metric("Current Price",    fmt_price(current_price))
             r3.metric("Upside / Downside", f"{upside:+.1f}%")
             r4.markdown(
-                f"<div style='padding:12px;border-radius:8px;background:rgba({"22,163,74" if upside>=10 else ("220,38,38" if upside<=-10 else "100,116,139")},0.15);text-align:center'>"
+                f"<div style='padding:12px;border-radius:8px;background:rgba({('22,163,74' if upside>=10 else ('220,38,38' if upside<=-10 else '100,116,139'))},0.15);text-align:center'>"
                 f"<span style='font-size:18px;font-weight:700;color:{upside_color}'>{verdict}</span></div>",
                 unsafe_allow_html=True,
             )
