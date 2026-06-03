@@ -3,10 +3,17 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
+import time
 
 try:
     from curl_cffi import requests as cffi_requests
-    _YF_SESSION = cffi_requests.Session(impersonate="chrome110")
+    _YF_SESSION = None
+    for _profile in ("chrome124", "chrome120", "chrome116", "chrome110"):
+        try:
+            _YF_SESSION = cffi_requests.Session(impersonate=_profile)
+            break
+        except Exception:
+            pass
 except Exception:
     _YF_SESSION = None
 
@@ -203,23 +210,20 @@ def yticker(symbol):
         return yf.Ticker(symbol, session=_YF_SESSION)
     return yf.Ticker(symbol)
 
-@st.cache_data(ttl=300)
-def fetch_stock_data(tickers):
-    rows = []
-    errors = []
-    for item in tickers:
-        t = item["ticker"]
+def _fetch_ticker_info(t, retries=2):
+    """Fetch ticker info with retry on failure."""
+    for attempt in range(retries + 1):
         try:
+            if attempt > 0:
+                time.sleep(1.5 * attempt)
             ticker_obj = yticker(t)
             info = ticker_obj.info
 
-            # info dict sometimes returns empty on cloud — fallback to fast_info
             price = (info.get("currentPrice") or info.get("regularMarketPrice")
                      or info.get("navPrice"))
             prev_close = (info.get("previousClose")
                           or info.get("regularMarketPreviousClose"))
 
-            # Fallback: use fast_info if info didn't return price
             if not price:
                 try:
                     fi = ticker_obj.fast_info
@@ -227,6 +231,26 @@ def fetch_stock_data(tickers):
                     prev_close = getattr(fi, "previous_close", None)
                 except Exception:
                     pass
+
+            # Verify we actually got something useful
+            if price or info.get("shortName"):
+                return info, price, prev_close
+        except Exception:
+            if attempt == retries:
+                raise
+    return {}, None, None
+
+@st.cache_data(ttl=300)
+def fetch_stock_data(tickers):
+    rows = []
+    errors = []
+    for i, item in enumerate(tickers):
+        t = item["ticker"]
+        # Small delay every 5 tickers to avoid triggering rate limits
+        if i > 0 and i % 5 == 0:
+            time.sleep(0.5)
+        try:
+            info, price, prev_close = _fetch_ticker_info(t)
 
             change_pct = ((price - prev_close) / prev_close * 100) if price and prev_close else None
 
