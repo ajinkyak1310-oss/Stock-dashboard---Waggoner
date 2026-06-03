@@ -338,6 +338,41 @@ def fetch_industry_peers(industry_key, exclude_ticker, max_peers=12):
             pass
     return pd.DataFrame(rows)
 
+@st.cache_data(ttl=3600)
+def fetch_macro_data():
+    """Fetch US macro indicators from FRED public CSV endpoint (no API key required)."""
+    import requests as _req
+    from io import StringIO
+    FRED_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+    SERIES = {
+        "fed_funds":    "FEDFUNDS",
+        "cpi":          "CPIAUCSL",
+        "unemployment": "UNRATE",
+        "gdp_growth":   "A191RL1Q225SBEA",
+        "t10y":         "DGS10",
+        "t2y":          "DGS2",
+    }
+    result = {}
+    for key, sid in SERIES.items():
+        try:
+            resp = _req.get(
+                f"{FRED_BASE}?id={sid}",
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp.status_code == 200:
+                df = pd.read_csv(
+                    StringIO(resp.text), parse_dates=["DATE"], index_col="DATE"
+                )
+                df.columns = [key]
+                df[key] = pd.to_numeric(
+                    df[key].replace(".", float("nan")), errors="coerce"
+                )
+                result[key] = df.dropna()
+        except Exception:
+            pass
+    return result
+
 @st.cache_data(ttl=600)
 def fetch_peers_data(peer_tickers):
     rows = []
@@ -1344,6 +1379,259 @@ if not hm_df.empty:
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Not enough data to render heatmap.")
+
+st.markdown("---")
+
+# ── Macro Economic Trends ─────────────────────────────────────────────────────
+
+st.subheader("🌍 Macro Economic Trends")
+st.caption("US economic indicators sourced from FRED (Federal Reserve Economic Data) · Refreshed hourly")
+
+with st.spinner("Loading macro indicators..."):
+    macro = fetch_macro_data()
+
+if not macro:
+    st.warning("Could not load macro data. FRED may be temporarily unavailable — try refreshing.")
+else:
+    def _mv(key, n_back=0):
+        """Return (current_value, delta_from_n_back_periods)."""
+        if key not in macro or macro[key].empty:
+            return None, None
+        vals = macro[key][key].dropna()
+        if len(vals) == 0:
+            return None, None
+        curr = float(vals.iloc[-1])
+        delta = None
+        if n_back > 0 and len(vals) > n_back:
+            delta = curr - float(vals.iloc[-1 - n_back])
+        return curr, delta
+
+    fed, fed_d   = _mv("fed_funds", 3)
+    t10, t10_d   = _mv("t10y", 30)
+    t2,  t2_d    = _mv("t2y",  30)
+    unemp, un_d  = _mv("unemployment", 3)
+    gdp_g, gdp_d = _mv("gdp_growth", 1)
+
+    cpi_yoy_val = cpi_yoy_delta = None
+    if "cpi" in macro and len(macro["cpi"]) >= 14:
+        cs = macro["cpi"]["cpi"].dropna()
+        if len(cs) >= 14:
+            cpi_yoy_val = (float(cs.iloc[-1]) - float(cs.iloc[-13])) / float(cs.iloc[-13]) * 100
+            prev_yoy = (float(cs.iloc[-2]) - float(cs.iloc[-14])) / float(cs.iloc[-14]) * 100
+            cpi_yoy_delta = cpi_yoy_val - prev_yoy
+
+    def _md(val, suffix="%"):
+        if val is None:
+            return None
+        return f"{'+' if val >= 0 else ''}{val:.2f}{suffix}"
+
+    mk1, mk2, mk3, mk4, mk5, mk6 = st.columns(6)
+    mk1.metric("Fed Funds Rate",      f"{fed:.2f}%"         if fed         else "—", delta=_md(fed_d))
+    mk2.metric("10Y Treasury",        f"{t10:.2f}%"         if t10         else "—", delta=_md(t10_d))
+    mk3.metric("2Y Treasury",         f"{t2:.2f}%"          if t2          else "—", delta=_md(t2_d))
+    mk4.metric("CPI YoY",             f"{cpi_yoy_val:.1f}%" if cpi_yoy_val else "—",
+               delta=_md(cpi_yoy_delta), delta_color="inverse")
+    mk5.metric("Unemployment",        f"{unemp:.1f}%"       if unemp       else "—",
+               delta=_md(un_d), delta_color="inverse")
+    mk6.metric("GDP Growth (Last Q)", f"{gdp_g:.1f}%"       if gdp_g       else "—", delta=_md(gdp_d))
+
+    st.markdown("")
+
+    mt1, mt2, mt3, mt4 = st.tabs(
+        ["📊 Inflation (CPI)", "👷 Employment", "📈 GDP", "🏦 Fed & Rates"]
+    )
+
+    _cl = dict(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e6edf3"),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.1)", showgrid=True),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", showgrid=True),
+        margin=dict(t=40, b=10, l=0, r=0),
+        legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(99,102,241,0.2)"),
+    )
+
+    # ── CPI Tab ───────────────────────────────────────────────────────────────
+    with mt1:
+        if "cpi" not in macro or macro["cpi"].empty:
+            st.info("CPI data unavailable.")
+        else:
+            cs = macro["cpi"]["cpi"].dropna()
+            yoy = (cs.pct_change(12) * 100).dropna().iloc[-30:]
+            bar_c = [
+                "#dc2626" if v > 5 else
+                ("#f59e0b" if v > 3 else
+                 ("#facc15" if v > 2 else "#16a34a"))
+                for v in yoy.values
+            ]
+            fig_c1 = go.Figure(go.Bar(
+                x=yoy.index, y=yoy.values, marker_color=bar_c, name="CPI YoY %",
+                text=[f"{v:.1f}%" for v in yoy.values], textposition="outside",
+                textfont=dict(size=9, color="#e6edf3"),
+            ))
+            fig_c1.add_hline(
+                y=2.0, line_dash="dash", line_color="#6366f1",
+                annotation_text="Fed 2% Target", annotation_font_color="#a5b4fc",
+                annotation_position="top right",
+            )
+            fig_c1.update_layout(
+                title="CPI Year-over-Year % Change (last 30 months)",
+                yaxis_title="YoY %", height=380, **_cl,
+            )
+            st.plotly_chart(fig_c1, use_container_width=True)
+
+            st.markdown("**Recent Monthly CPI Readings**")
+            cs_r  = cs.iloc[-12:]
+            yoy_r = (cs.pct_change(12) * 100).iloc[-12:]
+            cpi_tbl = pd.DataFrame({
+                "Date":      cs_r.index.strftime("%b %Y"),
+                "CPI Index": [f"{v:.3f}" for v in cs_r.values],
+                "YoY %":     [f"{v:.2f}%" if pd.notna(v) else "—" for v in yoy_r.values],
+            }).iloc[::-1].reset_index(drop=True)
+            st.dataframe(cpi_tbl, use_container_width=True, hide_index=True)
+
+    # ── Employment Tab ────────────────────────────────────────────────────────
+    with mt2:
+        if "unemployment" not in macro or macro["unemployment"].empty:
+            st.info("Employment data unavailable.")
+        else:
+            us = macro["unemployment"]["unemployment"].dropna().iloc[-30:]
+            avg_u = float(us.mean())
+            fig_c2 = go.Figure(go.Scatter(
+                x=us.index, y=us.values, mode="lines+markers",
+                line=dict(color="#f59e0b", width=2.5),
+                marker=dict(size=5, color="#f59e0b"),
+                fill="tozeroy", fillcolor="rgba(245,158,11,0.08)",
+                name="Unemployment %",
+            ))
+            fig_c2.add_hline(
+                y=avg_u, line_dash="dot", line_color="rgba(255,255,255,0.3)",
+                annotation_text=f"Avg {avg_u:.1f}%",
+                annotation_font_color="#94a3b8",
+                annotation_position="top left",
+            )
+            fig_c2.update_layout(
+                title="US Unemployment Rate % (last 30 months)",
+                yaxis_title="Unemployment %", height=380, **_cl,
+            )
+            st.plotly_chart(fig_c2, use_container_width=True)
+
+            st.markdown("**Recent Unemployment Readings**")
+            u_tbl = pd.DataFrame({
+                "Date":    us.index.strftime("%b %Y"),
+                "Rate %":  [f"{v:.1f}%" for v in us.values],
+                "MoM":     [
+                    f"{'+' if d >= 0 else ''}{d:.1f}pp" if pd.notna(d) else "—"
+                    for d in us.diff().values
+                ],
+            }).iloc[::-1].reset_index(drop=True)
+            st.dataframe(u_tbl, use_container_width=True, hide_index=True)
+
+    # ── GDP Tab ───────────────────────────────────────────────────────────────
+    with mt3:
+        if "gdp_growth" not in macro or macro["gdp_growth"].empty:
+            st.info("GDP data unavailable.")
+        else:
+            gs = macro["gdp_growth"]["gdp_growth"].dropna().iloc[-20:]
+            gdp_c = ["#16a34a" if v >= 0 else "#dc2626" for v in gs.values]
+            fig_c3 = go.Figure(go.Bar(
+                x=gs.index, y=gs.values, marker_color=gdp_c, name="GDP Growth %",
+                text=[f"{v:.1f}%" for v in gs.values], textposition="outside",
+                textfont=dict(size=9, color="#e6edf3"),
+            ))
+            fig_c3.add_hline(y=0, line_color="rgba(255,255,255,0.2)")
+            fig_c3.update_layout(
+                title="Real GDP Growth Rate — Quarterly, Annualized % (last 5 years)",
+                yaxis_title="QoQ Ann. %", height=380, **_cl,
+            )
+            st.plotly_chart(fig_c3, use_container_width=True)
+
+            st.markdown("**Recent GDP Readings**")
+            q_labels = [f"Q{(d.month - 1) // 3 + 1} {d.year}" for d in gs.index]
+            gdp_tbl = pd.DataFrame({
+                "Quarter":      q_labels,
+                "GDP Growth %": [f"{v:.1f}%" for v in gs.values],
+                "Status":       ["Expansion" if v >= 0 else "Contraction" for v in gs.values],
+            }).iloc[::-1].reset_index(drop=True)
+            st.dataframe(gdp_tbl, use_container_width=True, hide_index=True)
+
+    # ── Fed & Rates Tab ───────────────────────────────────────────────────────
+    with mt4:
+        fig_c4 = go.Figure()
+
+        if "fed_funds" in macro and not macro["fed_funds"].empty:
+            ff = macro["fed_funds"]["fed_funds"].dropna().iloc[-48:]
+            fig_c4.add_trace(go.Scatter(
+                x=ff.index, y=ff.values,
+                mode="lines", name="Fed Funds Rate",
+                line=dict(color="#6366f1", width=2.5),
+            ))
+
+        if "t10y" in macro and not macro["t10y"].empty:
+            t10s = macro["t10y"]["t10y"].dropna().iloc[-730:]
+            fig_c4.add_trace(go.Scatter(
+                x=t10s.index, y=t10s.values,
+                mode="lines", name="10Y Treasury",
+                line=dict(color="#38bdf8", width=1.5, dash="dot"),
+            ))
+
+        if "t2y" in macro and not macro["t2y"].empty:
+            t2s = macro["t2y"]["t2y"].dropna().iloc[-730:]
+            fig_c4.add_trace(go.Scatter(
+                x=t2s.index, y=t2s.values,
+                mode="lines", name="2Y Treasury",
+                line=dict(color="#f472b6", width=1.5, dash="dot"),
+            ))
+
+        if len(fig_c4.data) == 0:
+            st.info("Rate data unavailable.")
+        else:
+            fig_c4.update_layout(
+                title="Fed Funds Rate & Treasury Yields",
+                yaxis_title="Rate %", height=420, **_cl,
+            )
+            st.plotly_chart(fig_c4, use_container_width=True)
+
+        # Yield curve spread chart
+        if (
+            "t10y" in macro and "t2y" in macro
+            and not macro["t10y"].empty and not macro["t2y"].empty
+        ):
+            t10d = macro["t10y"]["t10y"].dropna()
+            t2d  = macro["t2y"]["t2y"].dropna()
+            spread_s = (t10d - t2d).dropna().iloc[-730:]
+            sp_c = ["#16a34a" if v >= 0 else "#dc2626" for v in spread_s.values]
+            fig_c5 = go.Figure(go.Bar(
+                x=spread_s.index, y=spread_s.values,
+                marker_color=sp_c, name="10Y-2Y Spread",
+            ))
+            fig_c5.add_hline(y=0, line_color="rgba(255,255,255,0.3)")
+            fig_c5.update_layout(
+                title="Yield Curve Spread (10Y minus 2Y) — Negative = Inverted Curve",
+                yaxis_title="Spread %", height=300, **_cl,
+            )
+            st.plotly_chart(fig_c5, use_container_width=True)
+            st.caption(
+                "An inverted yield curve (negative spread) has historically preceded US recessions by 6-18 months."
+            )
+
+        # FOMC decisions derived from monthly rate changes
+        if "fed_funds" in macro and not macro["fed_funds"].empty:
+            st.markdown("**Recent FOMC Rate Decisions**")
+            ff_all = macro["fed_funds"]["fed_funds"].dropna()
+            ff_diff = ff_all.diff().dropna()
+            fomc = ff_diff[ff_diff != 0].iloc[-15:]
+            if not fomc.empty:
+                fomc_tbl = pd.DataFrame({
+                    "Date":       fomc.index.strftime("%b %Y"),
+                    "Rate After": [f"{float(ff_all.loc[d]):.2f}%" for d in fomc.index],
+                    "Change":     [
+                        f"{'+' if v > 0 else ''}{v * 100:.0f} bps"
+                        for v in fomc.values
+                    ],
+                    "Direction":  ["▲ Hike" if v > 0 else "▼ Cut" for v in fomc.values],
+                }).iloc[::-1].reset_index(drop=True)
+                st.dataframe(fomc_tbl, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
