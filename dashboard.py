@@ -364,37 +364,81 @@ def fetch_industry_peers(industry_key, exclude_ticker, max_peers=12):
 
 @st.cache_data(ttl=3600)
 def fetch_macro_data():
-    """Fetch US macro indicators from FRED public CSV endpoint (no API key required)."""
+    """Fetch US macro from BLS (CPI, unemployment), World Bank (GDP), yfinance (yields).
+    No API keys required for any source."""
     import requests as _req
-    from io import StringIO
-    FRED_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv"
-    SERIES = {
-        "fed_funds":    "FEDFUNDS",
-        "cpi":          "CPIAUCSL",
-        "unemployment": "UNRATE",
-        "gdp_growth":   "A191RL1Q225SBEA",
-        "t10y":         "DGS10",
-        "t2y":          "DGS2",
-    }
     result = {}
-    for key, sid in SERIES.items():
+    yr = datetime.now().year
+
+    # ── Treasury yields via yfinance ──────────────────────────────────────────
+    # ^TNX = 10Y, ^IRX = 3-month T-bill (Fed proxy), ^FVX = 5Y
+    for key, sym in [("t10y", "^TNX"), ("fed_rate", "^IRX"), ("t5y", "^FVX")]:
         try:
-            resp = _req.get(
-                f"{FRED_BASE}?id={sid}",
-                timeout=15,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            if resp.status_code == 200:
-                df = pd.read_csv(
-                    StringIO(resp.text), parse_dates=["DATE"], index_col="DATE"
-                )
-                df.columns = [key]
-                df[key] = pd.to_numeric(
-                    df[key].replace(".", float("nan")), errors="coerce"
-                )
-                result[key] = df.dropna()
+            hist = yticker(sym).history(period="2y")
+            if not hist.empty:
+                result[key] = hist[["Close"]].rename(columns={"Close": key})
         except Exception:
             pass
+
+    # ── CPI + Unemployment from BLS public API (no key needed) ───────────────
+    try:
+        resp = _req.post(
+            "https://api.bls.gov/publicAPI/v1/timeseries/data/",
+            json={
+                "seriesid":  ["CUUR0000SA0", "LNS14000000"],
+                "startyear": str(yr - 3),
+                "endyear":   str(yr),
+            },
+            timeout=15,
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code == 200:
+            for series in resp.json().get("Results", {}).get("series", []):
+                sid = series["seriesID"]
+                key = "cpi" if sid == "CUUR0000SA0" else "unemployment"
+                rows = []
+                for item in series.get("data", []):
+                    p = item.get("period", "")
+                    if p.startswith("M") and p != "M13":
+                        try:
+                            rows.append({
+                                "DATE": pd.Timestamp(year=int(item["year"]),
+                                                     month=int(p[1:]), day=1),
+                                key: float(item["value"]),
+                            })
+                        except Exception:
+                            pass
+                if rows:
+                    result[key] = pd.DataFrame(rows).set_index("DATE").sort_index()
+    except Exception:
+        pass
+
+    # ── Annual GDP growth from World Bank (no key needed) ─────────────────────
+    try:
+        resp = _req.get(
+            "https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.KD.ZG",
+            params={"format": "json", "per_page": "15", "mrv": "15"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            wb = resp.json()
+            if len(wb) > 1 and wb[1]:
+                rows = []
+                for item in wb[1]:
+                    if item.get("value") is not None and item.get("date"):
+                        try:
+                            rows.append({
+                                "DATE": pd.Timestamp(year=int(item["date"]),
+                                                     month=7, day=1),
+                                "gdp_growth": float(item["value"]),
+                            })
+                        except Exception:
+                            pass
+                if rows:
+                    result["gdp_growth"] = pd.DataFrame(rows).set_index("DATE").sort_index()
+    except Exception:
+        pass
+
     return result
 
 @st.cache_data(ttl=600)
@@ -1409,13 +1453,13 @@ st.markdown("---")
 # ── Macro Economic Trends ─────────────────────────────────────────────────────
 
 st.subheader("🌍 Macro Economic Trends")
-st.caption("US economic indicators sourced from FRED (Federal Reserve Economic Data) · Refreshed hourly")
+st.caption("US economic indicators · BLS (CPI, Unemployment) · World Bank (GDP) · yfinance (Yields) · Refreshed hourly")
 
 with st.spinner("Loading macro indicators..."):
     macro = fetch_macro_data()
 
 if not macro:
-    st.warning("Could not load macro data. FRED may be temporarily unavailable — try refreshing.")
+    st.warning("Could not load macro data. Check your internet connection and try refreshing.")
 else:
     def _mv(key, n_back=0):
         """Return (current_value, delta_from_n_back_periods)."""
@@ -1430,9 +1474,9 @@ else:
             delta = curr - float(vals.iloc[-1 - n_back])
         return curr, delta
 
-    fed, fed_d   = _mv("fed_funds", 3)
+    fed, fed_d   = _mv("fed_rate", 30)   # 3M T-bill daily, 30 days back
     t10, t10_d   = _mv("t10y", 30)
-    t2,  t2_d    = _mv("t2y",  30)
+    t5,  t5_d    = _mv("t5y",  30)
     unemp, un_d  = _mv("unemployment", 3)
     gdp_g, gdp_d = _mv("gdp_growth", 1)
 
@@ -1450,14 +1494,14 @@ else:
         return f"{'+' if val >= 0 else ''}{val:.2f}{suffix}"
 
     mk1, mk2, mk3, mk4, mk5, mk6 = st.columns(6)
-    mk1.metric("Fed Funds Rate",      f"{fed:.2f}%"         if fed         else "—", delta=_md(fed_d))
-    mk2.metric("10Y Treasury",        f"{t10:.2f}%"         if t10         else "—", delta=_md(t10_d))
-    mk3.metric("2Y Treasury",         f"{t2:.2f}%"          if t2          else "—", delta=_md(t2_d))
+    mk1.metric("3M T-Bill (Fed Proxy)", f"{fed:.2f}%" if fed else "—", delta=_md(fed_d))
+    mk2.metric("10Y Treasury",          f"{t10:.2f}%" if t10 else "—", delta=_md(t10_d))
+    mk3.metric("5Y Treasury",           f"{t5:.2f}%"  if t5  else "—", delta=_md(t5_d))
     mk4.metric("CPI YoY",             f"{cpi_yoy_val:.1f}%" if cpi_yoy_val else "—",
                delta=_md(cpi_yoy_delta), delta_color="inverse")
     mk5.metric("Unemployment",        f"{unemp:.1f}%"       if unemp       else "—",
                delta=_md(un_d), delta_color="inverse")
-    mk6.metric("GDP Growth (Last Q)", f"{gdp_g:.1f}%"       if gdp_g       else "—", delta=_md(gdp_d))
+    mk6.metric("GDP Growth (Last Yr)", f"{gdp_g:.1f}%"      if gdp_g       else "—", delta=_md(gdp_d))
 
     st.markdown("")
 
@@ -1565,15 +1609,14 @@ else:
             ))
             fig_c3.add_hline(y=0, line_color="rgba(255,255,255,0.2)")
             fig_c3.update_layout(
-                title="Real GDP Growth Rate — Quarterly, Annualized % (last 5 years)",
-                yaxis_title="QoQ Ann. %", height=380, **_cl,
+                title="Real GDP Growth Rate — Annual % (World Bank, last 15 years)",
+                yaxis_title="Annual %", height=380, **_cl,
             )
             st.plotly_chart(fig_c3, use_container_width=True)
 
             st.markdown("**Recent GDP Readings**")
-            q_labels = [f"Q{(d.month - 1) // 3 + 1} {d.year}" for d in gs.index]
             gdp_tbl = pd.DataFrame({
-                "Quarter":      q_labels,
+                "Year":         [str(d.year) for d in gs.index],
                 "GDP Growth %": [f"{v:.1f}%" for v in gs.values],
                 "Status":       ["Expansion" if v >= 0 else "Contraction" for v in gs.values],
             }).iloc[::-1].reset_index(drop=True)
@@ -1583,27 +1626,27 @@ else:
     with mt4:
         fig_c4 = go.Figure()
 
-        if "fed_funds" in macro and not macro["fed_funds"].empty:
-            ff = macro["fed_funds"]["fed_funds"].dropna().iloc[-48:]
+        if "fed_rate" in macro and not macro["fed_rate"].empty:
+            ff = macro["fed_rate"]["fed_rate"].dropna().iloc[-504:]  # ~2 years daily
             fig_c4.add_trace(go.Scatter(
                 x=ff.index, y=ff.values,
-                mode="lines", name="Fed Funds Rate",
+                mode="lines", name="3M T-Bill (Fed Proxy)",
                 line=dict(color="#6366f1", width=2.5),
             ))
 
         if "t10y" in macro and not macro["t10y"].empty:
-            t10s = macro["t10y"]["t10y"].dropna().iloc[-730:]
+            t10s = macro["t10y"]["t10y"].dropna().iloc[-504:]
             fig_c4.add_trace(go.Scatter(
                 x=t10s.index, y=t10s.values,
                 mode="lines", name="10Y Treasury",
                 line=dict(color="#38bdf8", width=1.5, dash="dot"),
             ))
 
-        if "t2y" in macro and not macro["t2y"].empty:
-            t2s = macro["t2y"]["t2y"].dropna().iloc[-730:]
+        if "t5y" in macro and not macro["t5y"].empty:
+            t5s = macro["t5y"]["t5y"].dropna().iloc[-504:]
             fig_c4.add_trace(go.Scatter(
-                x=t2s.index, y=t2s.values,
-                mode="lines", name="2Y Treasury",
+                x=t5s.index, y=t5s.values,
+                mode="lines", name="5Y Treasury",
                 line=dict(color="#f472b6", width=1.5, dash="dot"),
             ))
 
@@ -1611,27 +1654,27 @@ else:
             st.info("Rate data unavailable.")
         else:
             fig_c4.update_layout(
-                title="Fed Funds Rate & Treasury Yields",
+                title="Treasury Yields (last 2 years) — 3M T-Bill tracks Fed Funds Rate closely",
                 yaxis_title="Rate %", height=420, **_cl,
             )
             st.plotly_chart(fig_c4, use_container_width=True)
 
-        # Yield curve spread chart
+        # Yield curve spread: 10Y minus 3M T-bill
         if (
-            "t10y" in macro and "t2y" in macro
-            and not macro["t10y"].empty and not macro["t2y"].empty
+            "t10y" in macro and "fed_rate" in macro
+            and not macro["t10y"].empty and not macro["fed_rate"].empty
         ):
             t10d = macro["t10y"]["t10y"].dropna()
-            t2d  = macro["t2y"]["t2y"].dropna()
-            spread_s = (t10d - t2d).dropna().iloc[-730:]
+            t3md = macro["fed_rate"]["fed_rate"].dropna()
+            spread_s = (t10d - t3md).dropna().iloc[-504:]
             sp_c = ["#16a34a" if v >= 0 else "#dc2626" for v in spread_s.values]
             fig_c5 = go.Figure(go.Bar(
                 x=spread_s.index, y=spread_s.values,
-                marker_color=sp_c, name="10Y-2Y Spread",
+                marker_color=sp_c, name="10Y-3M Spread",
             ))
             fig_c5.add_hline(y=0, line_color="rgba(255,255,255,0.3)")
             fig_c5.update_layout(
-                title="Yield Curve Spread (10Y minus 2Y) — Negative = Inverted Curve",
+                title="Yield Curve Spread (10Y minus 3M) — Negative = Inverted Curve",
                 yaxis_title="Spread %", height=300, **_cl,
             )
             st.plotly_chart(fig_c5, use_container_width=True)
@@ -1639,23 +1682,22 @@ else:
                 "An inverted yield curve (negative spread) has historically preceded US recessions by 6-18 months."
             )
 
-        # FOMC decisions derived from monthly rate changes
-        if "fed_funds" in macro and not macro["fed_funds"].empty:
-            st.markdown("**Recent FOMC Rate Decisions**")
-            ff_all = macro["fed_funds"]["fed_funds"].dropna()
-            ff_diff = ff_all.diff().dropna()
-            fomc = ff_diff[ff_diff != 0].iloc[-15:]
-            if not fomc.empty:
-                fomc_tbl = pd.DataFrame({
-                    "Date":       fomc.index.strftime("%b %Y"),
-                    "Rate After": [f"{float(ff_all.loc[d]):.2f}%" for d in fomc.index],
-                    "Change":     [
-                        f"{'+' if v > 0 else ''}{v * 100:.0f} bps"
-                        for v in fomc.values
-                    ],
-                    "Direction":  ["▲ Hike" if v > 0 else "▼ Cut" for v in fomc.values],
-                }).iloc[::-1].reset_index(drop=True)
-                st.dataframe(fomc_tbl, use_container_width=True, hide_index=True)
+        # Rate change table derived from 3M T-bill monthly moves
+        if "fed_rate" in macro and not macro["fed_rate"].empty:
+            st.markdown("**3M T-Bill Rate — Monthly Snapshot**")
+            ff_daily = macro["fed_rate"]["fed_rate"].dropna()
+            # Resample to month-end to show rate changes
+            ff_monthly = ff_daily.resample("ME").last().iloc[-18:]
+            ff_diff = ff_monthly.diff().dropna()
+            rate_tbl = pd.DataFrame({
+                "Month":     ff_monthly.index.strftime("%b %Y"),
+                "Rate":      [f"{v:.2f}%" for v in ff_monthly.values],
+                "MoM Change":[
+                    f"{'+' if v > 0 else ''}{v:.2f}pp" if pd.notna(v) else "—"
+                    for v in ff_monthly.diff().values
+                ],
+            }).iloc[::-1].reset_index(drop=True)
+            st.dataframe(rate_tbl, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
