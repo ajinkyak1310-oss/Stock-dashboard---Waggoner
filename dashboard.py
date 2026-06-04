@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import time
+import os
 
 try:
     from curl_cffi import requests as cffi_requests
@@ -16,6 +17,22 @@ try:
             pass
 except Exception:
     _YF_SESSION = None
+
+# ── Finnhub (reliable cloud alternative to Yahoo Finance) ─────────────────────
+# Set FINNHUB_API_KEY as a HF Space secret to enable. Free key at finnhub.io
+FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY", "")
+
+def _fh(path, **params):
+    """Call Finnhub API. Returns parsed JSON or None on failure."""
+    if not FINNHUB_KEY:
+        return None
+    import requests as _req
+    try:
+        params["token"] = FINNHUB_KEY
+        r = _req.get(f"https://finnhub.io/api/v1/{path}", params=params, timeout=10)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
 
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide", page_icon="📈")
 
@@ -210,20 +227,18 @@ def yticker(symbol):
         return yf.Ticker(symbol, session=_YF_SESSION)
     return yf.Ticker(symbol)
 
-def _fetch_ticker_info(t, retries=2):
-    """Fetch ticker info with retry on failure."""
+def _yf_ticker_info(t, retries=2):
+    """Fetch ticker info via yfinance with retry."""
     for attempt in range(retries + 1):
         try:
             if attempt > 0:
                 time.sleep(1.5 * attempt)
             ticker_obj = yticker(t)
             info = ticker_obj.info
-
             price = (info.get("currentPrice") or info.get("regularMarketPrice")
                      or info.get("navPrice"))
             prev_close = (info.get("previousClose")
                           or info.get("regularMarketPreviousClose"))
-
             if not price:
                 try:
                     fi = ticker_obj.fast_info
@@ -231,8 +246,6 @@ def _fetch_ticker_info(t, retries=2):
                     prev_close = getattr(fi, "previous_close", None)
                 except Exception:
                     pass
-
-            # Verify we actually got something useful
             if price or info.get("shortName"):
                 return info, price, prev_close
         except Exception:
@@ -240,20 +253,68 @@ def _fetch_ticker_info(t, retries=2):
                 raise
     return {}, None, None
 
+@st.cache_data(ttl=86400)
+def _fh_profiles(symbols_tuple):
+    """Fetch Finnhub company profiles — cached 24 h (names/mktcap rarely change)."""
+    profiles = {}
+    for sym in symbols_tuple:
+        p = _fh("stock/profile2", symbol=sym)
+        if p:
+            profiles[sym] = p
+        time.sleep(0.05)
+    return profiles
+
 @st.cache_data(ttl=300)
 def fetch_stock_data(tickers):
     rows = []
     errors = []
+    symbols = tuple(p["ticker"] for p in tickers)
+
+    # ── Path 1: Finnhub (works on cloud, no IP blocking) ──────────────────────
+    if FINNHUB_KEY:
+        profiles = _fh_profiles(symbols)
+        for item in tickers:
+            t = item["ticker"]
+            try:
+                q = _fh("quote", symbol=t) or {}
+                time.sleep(0.05)
+                price      = q.get("c") or None
+                prev_close = q.get("pc") or None
+                change_pct = q.get("dp") or (
+                    (price - prev_close) / prev_close * 100
+                    if price and prev_close else None
+                )
+                prof   = profiles.get(t, {})
+                name   = prof.get("name") or t
+                mktcap = prof.get("marketCapitalization")
+                if mktcap:
+                    mktcap = mktcap * 1_000_000  # Finnhub returns USD millions
+                rows.append({
+                    "Ticker": t, "Name": name, "Sector": item["sector"],
+                    "Class": item["class"], "Price": price, "Chg %": change_pct,
+                    "Volume": q.get("v"), "Mkt Cap": mktcap,
+                    "P/E": None, "52W High": q.get("h"), "52W Low": q.get("l"),
+                    "EPS": None, "Div Yield": None,
+                })
+            except Exception as e:
+                errors.append(f"{t}: {e}")
+                rows.append({"Ticker": t, "Name": t, "Sector": item["sector"],
+                             "Class": item["class"], "Price": None, "Chg %": None,
+                             "Volume": None, "Mkt Cap": None, "P/E": None,
+                             "52W High": None, "52W Low": None, "EPS": None, "Div Yield": None})
+        df = pd.DataFrame(rows)
+        if errors:
+            df.attrs["errors"] = errors
+        return df
+
+    # ── Path 2: yfinance (works locally, may be blocked on cloud) ─────────────
     for i, item in enumerate(tickers):
         t = item["ticker"]
-        # Small delay every 5 tickers to avoid triggering rate limits
         if i > 0 and i % 5 == 0:
             time.sleep(0.5)
         try:
-            info, price, prev_close = _fetch_ticker_info(t)
-
+            info, price, prev_close = _yf_ticker_info(t)
             change_pct = ((price - prev_close) / prev_close * 100) if price and prev_close else None
-
             rows.append({
                 "Ticker":   t,
                 "Name":     info.get("shortName") or info.get("longName") or t,
@@ -738,7 +799,15 @@ if df.attrs.get("errors"):
 
 null_prices = df["Price"].isna().sum()
 if null_prices == len(df):
-    st.error("❌ Could not fetch any market data. Yahoo Finance may be rate-limiting this server. Try refreshing in a minute.")
+    st.error("❌ Could not fetch any market data. Yahoo Finance is rate-limiting this server.")
+    st.info("""
+**Permanent fix — add a free Finnhub API key to HF Spaces:**
+1. Sign up free (no credit card) at **[finnhub.io](https://finnhub.io)**
+2. Copy your API key from the dashboard
+3. Go to your HF Space → **Settings** → **Variables and Secrets** → **New Secret**
+4. Name: `FINNHUB_API_KEY` · Value: your key → Save
+5. Restart the Space — data will load instantly with no IP blocking
+    """)
     st.stop()
 
 ticker_name_map = {row["Ticker"]: row["Name"] for _, row in df.iterrows()}
