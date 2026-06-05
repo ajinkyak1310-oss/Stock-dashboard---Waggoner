@@ -213,6 +213,16 @@ PORTFOLIO = [
 
 CLASS_COLORS = {"ERN": "🟡", "FCF": "🟢", "DIV": "🔵", "REV": "🟠"}
 
+_SECTORS = [
+    "Communication Services", "Consumer Discretionary", "Consumer Staples",
+    "Energy", "Financials", "Health Care", "Industrials",
+    "Information Technology", "Materials", "Real Estate", "Utilities",
+]
+_CLASSES = ["ERN", "FCF", "DIV", "REV"]
+
+if "portfolio" not in st.session_state:
+    st.session_state.portfolio = list(PORTFOLIO)
+
 # ── Data Fetching ─────────────────────────────────────────────────────────────
 
 def yticker(symbol):
@@ -724,7 +734,7 @@ def render_fin_table(df_raw, rows_to_show):
     df.index.name = f"(All $ in {unit})"
     st.dataframe(df, use_container_width=True)
 
-sel_tickers = [p["ticker"] for p in PORTFOLIO]
+sel_tickers = [p["ticker"] for p in st.session_state.portfolio]
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -759,11 +769,47 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-if st.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
+col_refresh, col_manage = st.columns([1, 5])
+with col_refresh:
+    if st.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
 
-filtered_portfolio = [p for p in PORTFOLIO if p["ticker"] in sel_tickers]
+with st.expander("⚙️ Manage Portfolio — Add / Remove Stocks"):
+    col_add, col_del = st.columns(2)
+
+    with col_add:
+        st.markdown("**Add a Stock**")
+        with st.form("add_stock_form", clear_on_submit=True):
+            new_ticker = st.text_input("Ticker Symbol", placeholder="e.g. AAPL").strip().upper()
+            new_sector = st.selectbox("Sector", _SECTORS)
+            new_class  = st.selectbox("Investment Class", _CLASSES,
+                                      help="ERN=Earnings · FCF=Free Cash Flow · DIV=Dividend · REV=Revenue growth")
+            add_btn = st.form_submit_button("Add to Portfolio")
+            if add_btn:
+                if not new_ticker:
+                    st.warning("Please enter a ticker symbol.")
+                elif new_ticker in [p["ticker"] for p in st.session_state.portfolio]:
+                    st.warning(f"{new_ticker} is already in the portfolio.")
+                else:
+                    st.session_state.portfolio.append(
+                        {"ticker": new_ticker, "sector": new_sector, "class": new_class}
+                    )
+                    st.cache_data.clear()
+                    st.rerun()
+
+    with col_del:
+        st.markdown("**Remove Stocks**")
+        current_tickers = [p["ticker"] for p in st.session_state.portfolio]
+        to_remove = st.multiselect("Select stocks to remove", current_tickers)
+        if st.button("Remove Selected", disabled=len(to_remove) == 0):
+            st.session_state.portfolio = [
+                p for p in st.session_state.portfolio if p["ticker"] not in to_remove
+            ]
+            st.cache_data.clear()
+            st.rerun()
+
+filtered_portfolio = list(st.session_state.portfolio)
 df = fetch_stock_data(filtered_portfolio)
 
 if df.attrs.get("errors"):
@@ -1025,7 +1071,7 @@ if selected_rows:
     # ── Peers ─────────────────────────────────────────────────────────────────
     with tab_peers:
         sector = selected["Sector"]
-        peer_list = [p["ticker"] for p in PORTFOLIO if p["sector"] == sector]
+        peer_list = [p["ticker"] for p in st.session_state.portfolio if p["sector"] == sector]
 
         st.markdown(f"**Sector peers — {sector}** ({len(peer_list)} stocks in portfolio)")
 
