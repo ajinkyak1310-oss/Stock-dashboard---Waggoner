@@ -288,6 +288,17 @@ def _fh_profiles(symbols_tuple):
         time.sleep(0.05)
     return profiles
 
+@st.cache_data(ttl=3600)
+def _fh_metrics(symbols_tuple):
+    """Fetch Finnhub stock metrics (52W high/low) — cached 1 h."""
+    metrics = {}
+    for sym in symbols_tuple:
+        m = _fh("stock/metric", symbol=sym, metric="all")
+        if m and "metric" in m:
+            metrics[sym] = m["metric"]
+        time.sleep(0.05)
+    return metrics
+
 @st.cache_data(ttl=300)
 def fetch_stock_data(tickers):
     rows = []
@@ -297,6 +308,7 @@ def fetch_stock_data(tickers):
     # ── Path 1: Finnhub (works on cloud, no IP blocking) ──────────────────────
     if FINNHUB_KEY:
         profiles = _fh_profiles(symbols)
+        metrics  = _fh_metrics(symbols)
         for item in tickers:
             t = item["ticker"]
             try:
@@ -313,12 +325,14 @@ def fetch_stock_data(tickers):
                 mktcap = prof.get("marketCapitalization")
                 if mktcap:
                     mktcap = mktcap * 1_000_000  # Finnhub returns USD millions
+                met = metrics.get(t, {})
                 rows.append({
                     "Ticker": t, "Name": name, "Sector": item["sector"],
                     "Class": item["class"], "Price": price, "Chg %": change_pct,
                     "Volume": q.get("v"), "Mkt Cap": mktcap,
-                    "P/E": None, "52W High": q.get("h"), "52W Low": q.get("l"),
-                    "EPS": None, "Div Yield": None,
+                    "P/E": met.get("peNormalizedAnnual"), "52W High": met.get("52WeekHigh"),
+                    "52W Low": met.get("52WeekLow"), "EPS": met.get("epsNormalizedAnnual"),
+                    "Div Yield": met.get("dividendYieldIndicatedAnnual"),
                 })
             except Exception as e:
                 errors.append(f"{t}: {e}")
