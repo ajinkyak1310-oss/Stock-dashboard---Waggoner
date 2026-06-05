@@ -43,15 +43,9 @@ st.markdown("""
     background: linear-gradient(160deg, #0d1117 0%, #0d1b2a 50%, #0d1117 100%);
 }
 
-/* ── Sidebar ─────────────────────────────────────────────────────────── */
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0d1117 0%, #161b22 100%);
-    border-right: 1px solid rgba(99,102,241,0.25);
-}
-[data-testid="stSidebar"] .stSelectbox label,
-[data-testid="stSidebar"] .stMarkdown {
-    color: #94a3b8 !important;
-}
+/* ── Hide sidebar ────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] { display: none; }
+[data-testid="collapsedControl"] { display: none; }
 
 /* ── Metric cards ────────────────────────────────────────────────────── */
 [data-testid="metric-container"] {
@@ -730,31 +724,7 @@ def render_fin_table(df_raw, rows_to_show):
     df.index.name = f"(All $ in {unit})"
     st.dataframe(df, use_container_width=True)
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-
-st.sidebar.title("🗂 Filters")
-sectors = ["All"] + sorted(set(p["sector"] for p in PORTFOLIO))
-classes = ["All"] + sorted(set(p["class"] for p in PORTFOLIO))
-sel_sector = st.sidebar.selectbox("Sector", sectors)
-sel_class  = st.sidebar.selectbox("Class",  classes)
-
-pre_filtered = [p for p in PORTFOLIO
-                if (sel_sector == "All" or p["sector"] == sel_sector)
-                and (sel_class == "All" or p["class"] == sel_class)]
-
-ticker_options = ["All"] + [p["ticker"] for p in pre_filtered]
-sel_stock = st.sidebar.selectbox("Stock", ticker_options)
-
-sel_tickers = [p["ticker"] for p in pre_filtered
-               if sel_stock == "All" or p["ticker"] == sel_stock]
-
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Class Legend**")
-for k, v in CLASS_COLORS.items():
-    st.sidebar.markdown(f"{v} **{k}**")
+sel_tickers = [p["ticker"] for p in PORTFOLIO]
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -788,6 +758,10 @@ st.markdown(f"""
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+if st.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
 
 filtered_portfolio = [p for p in PORTFOLIO if p["ticker"] in sel_tickers]
 df = fetch_stock_data(filtered_portfolio)
