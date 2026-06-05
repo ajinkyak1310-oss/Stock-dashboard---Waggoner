@@ -1,0 +1,122 @@
+[
+  {
+    "ticker": "FCNCA",
+    "sector": "Financials",
+    "class": "ERN"
+  },
+  {
+    "ticker": "MELI",
+    "sector": "Consumer Discretionary",
+    "class": "ERN"
+  },
+  {
+    "ticker": "ONON",
+    "sector": "Consumer Discretionary",
+    "class": "FCF"
+  },
+  {
+    "ticker": "DECK",
+    "sector": "Consumer Discretionary",
+    "class": "ERN"
+  },
+  {
+    "ticker": "OMAB",
+    "sector": "Industrials",
+    "class": "DIV"
+  },
+  {
+    "ticker": "NTES",
+    "sector": "Information Technology",
+    "class": "DIV"
+  },
+  {
+    "ticker": "KDP",
+    "sector": "Consumer Staples",
+    "class": "DIV"
+  },
+  {
+    "ticker": "AXON",
+    "sector": "Industrials",
+    "class": "REV"
+  },
+  {
+    "ticker": "CAVA",
+    "sector": "Consumer Discretionary",
+    "class": "REV"
+  },
+  {
+    "ticker": "TTWO",
+    "sector": "Communication Services",
+    "class": "REV"
+  },
+  {
+    "ticker": "JPM",
+    "sector": "Financials",
+    "class": "DIV"
+  },
+  {
+    "ticker": "MS",
+    "sector": "Financials",
+    "class": "DIV"
+  },
+  {
+    "ticker": "PGR",
+    "sector": "Financials",
+    "class": "ERN"
+  },
+  {
+    "ticker": "IBKR",
+    "sector": "Financials",
+    "class": "ERN"
+  },
+  {
+    "ticker": "FSLR",
+    "sector": "Information Technology",
+    "class": "ERN"
+  },
+  {
+    "ticker": "CME",
+    "sector": "Financials",
+    "class": "DIV"
+  },
+  {
+    "ticker": "BK",
+    "sector": "Financials",
+    "class": "DIV"
+  },
+  {
+    "ticker": "XZO",
+    "sector": "Information Technology",
+    "class": "REV"
+  },
+  {
+    "ticker": "CVNA",
+    "sector": "Consumer Discretionary",
+    "class": "FCF"
+  },
+  {
+    "ticker": "SOFI",
+    "sector": "Financials",
+    "class": "FCF"
+  },
+  {
+    "ticker": "OZK",
+    "sector": "Financials",
+    "class": "DIV"
+  },
+  {
+    "ticker": "CRWV",
+    "sector": "Information Technology",
+    "class": "REV"
+  },
+  {
+    "ticker": "ALAB",
+    "sector": "Information Technology",
+    "class": "REV"
+  },
+  {
+    "ticker": "ANET",
+    "sector": "Information Technology",
+    "class": "ERN"
+  }
+]

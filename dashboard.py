@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 from datetime import datetime
 import time
 import os
+import json
+import pathlib
 
 try:
     from curl_cffi import requests as cffi_requests
@@ -220,8 +222,26 @@ _SECTORS = [
 ]
 _CLASSES = ["ERN", "FCF", "DIV", "REV"]
 
+_PORTFOLIO_FILE = pathlib.Path(__file__).parent / "portfolio.json"
+
+def _load_portfolio():
+    """Load portfolio from disk, falling back to the hardcoded default."""
+    if _PORTFOLIO_FILE.exists():
+        try:
+            return json.loads(_PORTFOLIO_FILE.read_text())
+        except Exception:
+            pass
+    return list(PORTFOLIO)
+
+def _save_portfolio(portfolio):
+    """Persist portfolio to disk so changes survive page refreshes."""
+    try:
+        _PORTFOLIO_FILE.write_text(json.dumps(portfolio, indent=2))
+    except Exception:
+        pass
+
 if "portfolio" not in st.session_state:
-    st.session_state.portfolio = list(PORTFOLIO)
+    st.session_state.portfolio = _load_portfolio()
 
 # ── Data Fetching ─────────────────────────────────────────────────────────────
 
@@ -795,6 +815,7 @@ with st.expander("⚙️ Manage Portfolio — Add / Remove Stocks"):
                     st.session_state.portfolio.append(
                         {"ticker": new_ticker, "sector": new_sector, "class": new_class}
                     )
+                    _save_portfolio(st.session_state.portfolio)
                     st.cache_data.clear()
                     st.rerun()
 
@@ -806,6 +827,7 @@ with st.expander("⚙️ Manage Portfolio — Add / Remove Stocks"):
             st.session_state.portfolio = [
                 p for p in st.session_state.portfolio if p["ticker"] not in to_remove
             ]
+            _save_portfolio(st.session_state.portfolio)
             st.cache_data.clear()
             st.rerun()
 
