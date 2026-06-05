@@ -332,7 +332,8 @@ def fetch_stock_data(tickers):
                     "Volume": q.get("v"), "Mkt Cap": mktcap,
                     "P/E": met.get("peNormalizedAnnual"), "52W High": met.get("52WeekHigh"),
                     "52W Low": met.get("52WeekLow"), "EPS": met.get("epsNormalizedAnnual"),
-                    "Div Yield": met.get("dividendYieldIndicatedAnnual"),
+                    "Div Yield": (met["dividendYieldIndicatedAnnual"] / 100
+                                  if met.get("dividendYieldIndicatedAnnual") is not None else None),
                 })
             except Exception as e:
                 errors.append(f"{t}: {e}")
